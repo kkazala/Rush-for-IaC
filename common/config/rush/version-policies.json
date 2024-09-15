@@ -1,0 +1,10 @@
+[
+  {
+    "definitionName": "individualVersion",
+    "policyName": "AzTemplateSpecs"
+  },
+  {
+    "definitionName": "individualVersion",
+    "policyName": "azFunctions"
+  }
+]

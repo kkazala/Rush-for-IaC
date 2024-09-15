@@ -1,0 +1,31 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/rush/v5/rush.schema.json",
+  "rushVersion": "5.134.0",
+  "pnpmVersion": "9.10.0",
+  "nodeSupportedVersionRange": ">=18.20.3 <19.0.0 || >=20.14.0 <21.0.0",
+  "projectFolderMaxDepth": 3,
+  "gitPolicy": {
+    "versionBumpCommitMessage": "chore: Bump versions [skip ci]",
+    "changeLogUpdateCommitMessage": "chore: Update changelogs [skip ci]",
+    "allowedEmailRegExps": [
+      "[^@]+@users\\.noreply\\.github\\.com"
+    ],
+    "sampleEmail": "example@users.noreply.github.com"
+  },
+  "repository": {
+    "url": "https://github.com/kkazala/RushForIAC.git",
+    "defaultBranch": "main",
+    "defaultRemote": "origin"
+  },
+  /**
+   * (Required) This is the inventory of projects to be managed by Rush.
+   *
+   */
+  "projects": [
+    {
+      "packageName": "function-app",
+      "projectFolder": "AzureTemplates/FunctionApp",
+      "versionPolicyName": "AzTemplateSpecs"
+    }
+  ]
+}

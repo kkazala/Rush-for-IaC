@@ -1,0 +1,231 @@
+name: Deploy Solution
+# Deploy Environment and Solution Azure Resources to the Environment selected in Stages
+
+trigger:
+  batch: true
+  branches:
+    include:
+      - features/*
+  paths:
+    include:
+      - AzTemplates
+    exclude:
+      - AzTemplates/**/changelog.json
+      - AzTemplates/**/changelog.md
+      - AzTemplates/**/package.json
+
+pool:
+  vmImage: 'windows-latest'
+
+parameters:
+  # Service connection that is used for connecting to ARM
+- name: serviceConnectionName
+  displayName: 'Service connection name'
+  type: string
+  default: 'DEV'
+- name: azResourceGroupNameTemplateSpec
+  displayName: 'Az Resource Group Name for TemplateSpec'
+  default: 'RushForIaC'
+- name: azResourceGroupNameResources
+  displayName: 'Az Resource Group Name for deployment'
+  default: 'RushForIaC'  
+- name: azLocation
+  displayName: 'Location for resource groups if do not exist'
+  default:   switzerlandnorth       
+
+jobs:
+  - job: ValidateAndPackage
+    displayName: Validate and Package
+    variables:
+    - name: templatesPath
+      value: $(Build.SourcesDirectory)/AzureTemplates/
+    - name: scriptsPath
+      value: $(Build.SourcesDirectory)/Pipelines/scripts/
+
+    steps:
+    - checkout: self
+      fetchDepth: 1
+
+    - task: AzurePowerShell@5
+      condition: succeeded()
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnectionName }}
+        azurePowerShellVersion: latestVersion
+        ScriptType: InlineScript
+        inlineScript: |
+          Write-Host "##[group]Who am I"
+          $azContext = (Get-AzContext).Account.Id
+          $sp = Get-AzADServicePrincipal -ApplicationId $azContext
+          Write-Host "##[debug] ServicePrincipal: $($sp.Id)"
+          Write-Host "##[endgroup]"
+      displayName: Who am I?
+          
+    # Run Bicep Build
+    - powershell: |
+        Get-ChildItem -Path $(templatesPath)\**\*.bicep  -Recurse | ForEach-Object {
+            az bicep build --file $_.FullName
+        }
+      name: LintBicepCode
+      displayName: Run Bicep linter
+
+    # Save parameters to pipeline variable
+    - powershell: |
+        $Parameters = @{}
+
+        Get-ChildItem -Path '$(templatesPath)' -Filter deploy.parameters.json -recurse | ForEach-Object {
+          $json= $(get-content -raw -path $_.FullName | ConvertFrom-Json).parameters
+          $json | Get-Member -MemberType NoteProperty  | ForEach-Object {
+            $name = $_.Name ;
+            $Parameters.Add($name, $($json.$name.value))
+          }
+        }
+          Write-Host $Parameters | ConvertTo-Json
+          Write-Host $Parameters.version_TemplateSpec
+
+        Write-Host "##vso[task.setvariable variable=parameters;isOutput=true]$($Parameters  | ConvertTo-Json -Compress)"
+        Write-Host "##vso[task.setvariable variable=templateVer;isOutput=true]$($Parameters.version_TemplateSpec)"
+        
+        # variables to use for tags if resource groups created by azure cli
+        Write-Host "##vso[task.setvariable variable=environment;isOutput=true]$($Parameters.environment)"
+        Write-Host "##vso[task.setvariable variable=project;isOutput=true]$($Parameters.project)"
+        Write-Host "##vso[task.setvariable variable=costCenter;isOutput=true]$($Parameters.costCenter)"
+      name: getConfig
+      displayName: Get Parameters from deploy.parameters.json
+
+    # Create or Update Template Spec
+    - task: AzureCLI@2
+      name: TemplateSpecCreate
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnectionName }}
+        scriptType: 'pscore'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          $rgTemplateSpec= "${{ parameters.azResourceGroupNameTemplateSpec }}"
+
+          $templateSpecName='RushForIaC-TemplateSpec'
+          $version='$(getConfig.templateVer)'
+          Write-Host $version
+
+          # Ensure the resource group for template specs exists
+          if((az group exists --name $rgTemplateSpec) -eq 'false'){
+            az group create --location ${{ parameters.azLocation }} --name $rgTemplateSpec  `
+              --tags CostCenter='$(getConfig.costCenter)' Environment='$(getConfig.environment)' Project='$(getConfig.project)}'
+          }
+
+          $versionExists=$false
+          
+          $templSpecs =  (az ts list --resource-group $rgTemplateSpec | ConvertFrom-Json)  | where {$_.name -eq $templateSpecName }
+          if($templSpecs -ne $null){
+            $versionExists =  (az ts show `
+                --resource-group $rgTemplateSpec   `
+                --name $templateSpecName   `
+                --query '{versions:versions, id:id}'   `
+                  | ConvertFrom-Json).versions -contains $version
+          }
+          
+          if($versionExists -eq $true){
+            Write-Host "Version  $version exists. Updating..."
+        
+            $templateSpecId= az ts show -g $rgTemplateSpec --name $templateSpecName --version $version --query id
+            Write-Host "##vso[task.setvariable variable=templateSpecId]$templateSpecId"
+            Write-host $templateSpecId
+
+            Write-host "az ts update"
+            $result= az ts update `
+                --template-spec $templateSpecId `
+                --template-file '$(templatesPath)/deploy.bicep' `
+                --tags CostCenter='$(getConfig.costCenter)' Environment='$(getConfig.environment)' Project='$(getConfig.project)}' TemplateSpec_Version=$version `
+                --yes 
+          }
+          else{
+            Write-host "az ts create"
+            $result= az ts create  `
+                --name $templateSpecName  `
+                --resource-group $rgTemplateSpec  `
+                --template-file '$(templatesPath)/deploy.bicep'  `
+                --version  $version  `
+                --tags CostCenter='$(getConfig.costCenter)' Environment='$(getConfig.environment)' Project='$(getConfig.project)}' TemplateSpec_Version=$version `
+                --yes
+
+            $templateSpecId= az ts show --resource-group $rgTemplateSpec --name $templateSpecName --version $version --query id
+            Write-Host "##vso[task.setvariable variable=templateSpecId]$templateSpecId"
+          }
+         
+      displayName: Create Template Spec
+
+    # Deploy Template Spec
+    - task: AzureCLI@2
+      name: TemplateSpecDeploy
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnectionName }}
+        scriptType: 'pscore'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          $rgDeployment= "${{ parameters.azResourceGroupNameResources }}"
+          
+          # Ensure the resource group for deployment exists
+          if((az group exists --name $rgDeployment) -eq 'false'){
+            az group create --location ${{ parameters.azLocation }} --name $rgDeployment  `
+              --tags CostCenter='$(getConfig.costCenter)' Environment='$(getConfig.environment)' Project='$(getConfig.project)}'
+          }
+
+          $deploymentName="azuredeploy-$((Get-Date -Format FileDateTime) -replace "T", "-")"
+          Write-host $deploymentName
+          Write-Host "##vso[task.setvariable variable=deploymentName;isOutput=true]$deploymentName"
+
+          $result= az deployment group create   `
+            --name $deploymentName   `
+            --resource-group $rgDeployment `
+            --template-spec $(templateSpecId)   `
+            --parameters '$(templatesPath)/deploy.parameters.json' | ConvertFrom-Json
+
+          $applicationInsightsId = $result.properties.outputs.applicationInsightsId.value
+          Write-Host "##vso[task.setvariable variable=applicationInsightsId;isOutput=true]$applicationInsightsId"
+          Write-host $applicationInsightsId
+
+      displayName: Deploy Template Spec
+
+    # Validate deployment results
+    - task: AzureCLI@2
+      name: TemplateSpecResults
+      condition: always()
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnectionName }}
+        scriptType: 'pscore'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          $results = az deployment group show   `
+            --name $(TemplateSpecDeploy.deploymentName)   `
+            --resource-group ${{ parameters.azResourceGroupNameResources }} `
+            --query properties |    `
+            ConvertFrom-Json
+
+          Write-Host  "##vso[task.setvariable variable=result]$($results.provisioningState)"
+
+          if($results.provisioningState -eq "Succeeded"){
+            Write-Host "---------------------- $($results.provisioningState) ---------------------"
+            $resultsFile= '$(Build.SourcesDirectory)\DeployResults.json'
+
+            $results | ConvertTo-Json -Depth 10 | Out-File $resultsFile
+            Write-Host  "##vso[task.setvariable variable=resultsFile]$resultsFile" # use this file for Pester tests for example
+          }
+      displayName: Get results of Template Spec deployment
+
+    # Create release annotations with the Azure CLI
+    # https://learn.microsoft.com/en-us/azure/azure-monitor/app/release-and-work-item-insights?tabs=release-annotations#create-release-annotations-with-the-azure-cli
+    - task: AzurePowerShell@5
+      name: Annotations
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnectionName }}
+        azurePowerShellVersion: latestVersion
+        ScriptType: 'FilePath'
+        ScriptPath: '$(scriptsPath)\CreateReleaseAnnotation.ps1'
+        ScriptArguments: 
+          -aiResourceId "$(TemplateSpecDeploy.applicationInsightsId)" 
+          -releaseName "$(getConfig.templateVer)" 
+          -releaseProperties @{"ReleaseDescription"="Rush for IaC";"TriggerBy"="$(Build.RequestedForEmail)" }  
+
+
+
+
+

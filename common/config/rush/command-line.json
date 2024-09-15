@@ -1,0 +1,23 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/rush/v5/command-line.schema.json",
+  "commands": [
+    {
+      "name": "ver:azure",
+      "commandKind": "global",
+      "summary": "Analyzes versions of rush-managed projects and bumps TemplateSpec versions",
+      "shellCommand": "node common/scripts/rush-TemplateSpec.js"
+    }
+  ],
+  "parameters": [
+    {
+      "parameterKind": "string",
+      "argumentName": "POLICY",
+      "longName": "--version-policy",
+      "shortName": "-p",
+      "description": "Version policy name. Only projects with this version policy will be published if used with --include-all.",
+      "associatedCommands": [
+        "ver:azure"
+      ]
+    }
+  ]
+}

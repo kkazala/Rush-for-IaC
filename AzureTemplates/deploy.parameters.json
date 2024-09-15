@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environment": {
+      "value": "Development"
+    },
+    "project": {
+      "value": "MyProjectName"
+    },
+    "costCenter": {
+      "value": "CostCenter"
+    },
+    "webAppName": {
+      "value": "MyAzureFunction"
+    },
+    "version_ApplicationInsights": {
+      "value": "0.0.1"
+    },
+    "version_FunctionApp": {
+      "value": "0.0.1"
+    },
+    "version_TemplateSpec": {
+      "value": "0.0.2"
+    }
+  }
+}

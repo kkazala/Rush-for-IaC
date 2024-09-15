@@ -1,0 +1,10 @@
+{
+  "changes": [
+    {
+      "packageName": "function-app",
+      "comment": "initial version",
+      "type": "none"
+    }
+  ],
+  "packageName": "function-app"
+}
